@@ -1,0 +1,482 @@
+INSTALL GPT:
+- (if bios) change alignment to 1 in gdisk and create a bios boot partition (ef02) with 1007Kib (sector 34-2007)
+- install wpa_supplicant while in chroot
+- grub-install --target=i386-pc --recheck /dev/sdx
+- grub-mkconfig -o /boot/grub/grub.cfg
+
+LINUX CONSOLE:
+- uncomment wanted locales in /etc/locale.gen and call locale-gen
+- keyboard related files are in /usr/share/kbd (keymaps, locales, consolefonts, ...)
+- when a keyboard key is pressed, scancodes wander to the kernel's kb driver; depending on the driver mode for the given process, it can get different data:
+  - scancode mode: they are transmitted as is (X server, showkey -s)
+  - keycode mode: they are parsed into keycodes by the driver and transmitted (showkey -k); custom mappings from unusual scancodes to keycodes may be set with setkeycodes <scancode hex> <keycode dec> - rarely used, only for strange keyboards
+  - keysym mode: keycodes are parsed into keysyms in a certain charset (i.e. the result are keysyms codes for the specified charset or Unicode if keyboard is in Unicode mode - this is resolved at loadkeys time) and transmitted to the process (standard apps, showkey -a); charset and keycode to keysym mapping is done in keymaps which can be set with loadkeys (see man keymaps for details)
+  - keysyms are actions like outputting single or multiple characters, switching consoles or keymaps, booting etc. and can use only keys or keys with modifiers; they can be given as numbers, in Unicode notation or symbols (there is yet another mapping from symbols to numeric values the kernel works with and which can be shown with dumpkeys -l)
+  - use showkeys -a|-s|-k to show key in ASCII, scancodes or keycodes
+  - keyboard mode can be changed with kbd_mode -a|-u|-s|-k
+- use loadkeys for the preferred keymap (like pl or de); it defines the charset used (pl -> ISO 8859-2) and keycode to action mappings
+- check keyboard mode with kbd_mode; if not in Unicode mode, set it with kbd_mode -u; this makes loadkeys and dumpkeys work correctly with U+nnnn entries
+- when output is done, like with a print function, the following happens:
+  - the kernel first tries to figure out the Unicode symbol for the bytes it gets
+  - if the console is in utf-8 mode, the bytes are composed into UCS-2
+  - if the console is in ASCII mode, each byte is transformed to Unicode code according to one of 4 tables (one is user-defined with mapscrn (obsolete) or setfont -m)
+  - the console driver parses the text and looks for special escape sequences, and if finds any, does special things like cursor movement etc. (see 'man console_codes')
+  - for normal characters, the Unicode code is converted into a font index using a font Unicode map, either embedded in a font or loaded explicitly with loadunimap or setfont -u; use setfont -v to see if the font has embedded map, .psfu fonts should have it
+  - the font index is put into the video memory and its glyph is found in character ROM and displayed; the ROM is filled with glyphs when setfont is called
+- check if terminal uses utf8 with stty -a (look for iutf8); if not, set it with stty iutf8; to do it permamently, it should be done in shell config files (e.g. .bashrc); also set a correct font with a correct Unicode map (if necessary, new fonts incorporate it)
+- unicode_start and unicode_stop are useful scripts whose comments explain what exactly happens when kbd_mode and stty iutf8 etc. are used
+- Unicode characters can be input with AltGr+NumericPad
+- stty rows <n> to limit the terminal to <n> rows; to get the current values use 'stty -a', e.g. look for 'rows'
+- to set fonts etc. persistently, edit /etc/vconsole.conf (on systemd systemd, others might require something different):
+  KEYMAP=pl # used by loadkeys
+  FONT=lat2-16 # or ter-216n or Lat2-Terminus16, used by setfont
+  FONT_MAP=8859-2 # used by setfont -m
+- /etc/vconsole.conf settings might not work if the graphic driver is loaded after it and resets the card; easiest to have the driver be loaded by early userspace
+- gpm -m /dev/input/mice -t ps2 -2 - enables ps2 type 2-button mouse in the console
+- if input of special characters doesn't work, make sure a correct font mapping is defined (setfont -m)
+
+VARIOUS:
+- ~/.pam_environment for user specific environment settings; read no matter what bash or desktop, as long as PAM is used
+- Anonymous Pro fonts for coding (aur)
+- bash:
+  - shopt -s autocd (automatically adds cd for paths)
+  - set -o vi (vi-like bindings), maybe set editing-mode vi?
+- bash 'process substitution' <(cmd) and >(cmd) is cool
+  - cmd can be any complex shell command with lists and whatnots
+  - <(cmd) - the output of 'cmd' goes to a FIFO (named pipe) and it can be passed instead of a readable file argument
+  - >(cmd) - is used as a writable file argument and writing to it will provide input for 'cmd'
+  - this way many commands can be called and their output made available to one command, e.g.:
+    wl -l <(cat dupa) # executes 'cat dupa', redirect its output to a FIFO, and passes its descriptor to wc as a file
+    diff <(ls dirA) <(ls dirB) # compare contents of two directories
+    tee >(wc -l >&2) < bigfile | gzip > bigfile.gz # compresses bigfile and prints its line count at the same time
+    how? it reads from bigfile; tee writes its stdin to stdout (this is what gets gzipped at the end of the list) and to a file, which in
+    this case is the FIFO, which is then passed to the wc command as a file, and wc writes the line count to stderr
+- /sys/class/power_supply contains information about AC adapter connection status and battery status etc.; for example, this will print % of
+  battery left:
+  python -c "print(int($(cat /sys/class/power_supply/BAT1/charge_now) / $(cat /sys/class/power_supply/BAT1/charge_full)) * 100, '%')"
+  of course, there are tools for that: upower, acpi etc.
+- change (via dropins or else) the getty@ttyX to include '--autologin root' to login automatically (this is generally not a good idea, and
+  especially for root for obvious reasons, but is handy for playgrounds ;d)
+- to change settings for all vts, change the autovt@.service (via dropins or whatever); vt1 needs to be treated explicitly; for example, if dropins are used for autovt@.service, make a link from /etc/systemd/system/getty@tty1.service.d to /etc/systemd/system/autovt@.service.d (obviously, this idea is really bad)
+- add .hushlogin to disable all welcome messages on login etc.
+- /proc/self for process introspection
+- tac is cat from last line to first
+- rev reverses a line of characters
+- df -i shows usage of inodes
+- echo 1|2|3 > /proc/sys/vm/drop_caches to free pagecache (1), dentries and inodes (2) or all (3); sync should be called first
+
+SWAP:
+- recommended for machines with < 1G RAM
+- check swap with swapon -s or cat /proc/swaps
+- there can be a swap partition or swap file
+- there is no performance difference between swap partition and swap file
+- not all filesystems (like Btrfs) support swap files
+- swap partitions can be created in gdisk etc. or with mkswap /dev/sdx
+- enabling a device for swap is done with swapon /dev/sdx; to make it permanent put '/dev/sdx none swap defaults 0 0' in /etc/fstab
+- if using systemd, defining swap in fstab is not needed as it is smart enough to automatically discover partitions of type 82 (normally used for swaps) and turning swap on them
+- swap files are more flexible as they allow swaps of varying sizes
+- to create a swap file, dd or fallocate (faster) can be used: fallocate -l 1GiB /swapfile or dd if=/dev/zero of=/swapfile bs=1G count=1
+- the permissions should be set to 600 as world readable swap file is a security flaw
+- format the swap file: mkswap /swapfile
+- activate: swapon /swapfile; to make it permanent put '/swapfile none swap defaults 0 0' in /etc/fstab
+- deactivating swap is done with swapoff; if swap is managed by systemd, it might be reenabled after some time
+- setting swappiness to lower than the default (60) via sysctl or in /etc/sysctl.d/*.conf reduces swapping and may improve responsiveness
+- multiple swaps may have priority assigned to them (0-32767, higher priority wins) with the pri= option in fstab or swapon -p
+
+TTY:
+- a terminal is a dedicated device connected via a serial line etc.
+- a terminal emulator is something cheaper which emulates a real terminal, e.g. vt100
+- nowadays a terminal emulator is understood to be software that emulates such a vt100
+- a virtual terminal is something like putty, i.e. software pretending to be a terminal in the kernel; there is a limit (nowadays 64)
+- a terminal emulator is something like xterm, gnome-terminal or ssh; it doesn't use the vts but rather pseudo terminals with terminal
+  master /dev/ptmx and slaves in /dev/pts/, a thin kernel layer used to emulate terminals
+- a console is the primary terminal directly connected to the computer; on linux, it is a range of vts
+- kernel contains the 'terminal core' which consists of TTY driver and a line discipline
+- the core passes user data to the discipline, which has the opportunity to change it, and then passes to the TTY driver which is
+  responsible for sending to the hardware
+- when data comes from the hardware, the TTY driver reads it, passes to the line discipline, and then to the userspace
+- the line discipline is pluggable and sometimes might not be used
+- the line discipline is the 'thing' handling line editing, generating signals for special combinations (^C) etc.
+- line discipline may be run in raw or cooked/canonical mode (the default, where things are intepreted and might be transformed by it);
+  applications using the ncurses or readline libraries or similar use the raw mode and let the library interpret everything for it
+- the discipline is responsible for transforming the data, like protocol conversion for BT or PPP
+- there are three types of TTY drivers: console, serial port and pty
+- the console and pty are already written, custom drivers are all serial
+- the currently loaded drivers are listed in /proc/tty/drivers
+- /dev/tty0 is an alias to the current tty, and system messages are always sent to it so that they are always visible no matter which vt is
+  in use
+- call tty to check current tty
+- chvt creats if necessary and makes the specified vt the current one; deallocvt remove it if unused
+- opening /dev/ptmx returns the processes master file descriptor and creates a /dev/pts/X file which is the slave
+- data written to the slave is input in the master; data written to the master is input in the slave
+- this is used to implement terminal emulators line xterm or sshd
+- a process can always directoly access its tty, which is a way to bypass redirection
+- only foreground groups may read from a terminal; by default, also only foreground groups may write to it, but this is configurable with stty
+- normally, the init system would start a predefined number of gettys, systemd does it on demand for vts 2-6 (this is defined in
+  logind.conf by NAutoVTs, and the autovt@.service is used, by default linked to getty@.service)
+- vt1 is used only when a service for tty1 is enabled and also used for graphic environments; vt6 is by default reserved and no graphics can
+  happen there (can be changed in logind.conf with ReserveVT), this is done to always have at least on text login
+- getty calls login by default, but this can be changed
+- to starty agetty (the arch/systemd default getty), it has to be done with 'setsid' so that the getty is started in a new session with its
+  own controlling terminal (otherwise the tty which started it is the controlling one and it will hang after login or eject the session of
+  the starting tty etc.)
+- there are quite a few fb gettys and terms which are framebuffer aware, see below
+- basically, KMS sets the highest available mode early on and enables fb; X does the same for the mode
+- is KMS is disabled (nomodeset, i915.modeset=0 and the like), some other driver (vesa?) should be used to configure the resolution etc.
+- processes are divided into groups and sessions; each process belongs to a group and one session, and a group is entirely contained within a session (i.e. all processes in a group have belong to the same session)
+- process groups and sessions have the id of the process that creates them and become group and session leader
+- process data and membership can be queried using /proc/<pid>/stat; the fields are 'pid (name) state ppid pgid sid tty...' (see man proc for more)
+- each session may have a controlling terminal, and a terminal might be a controlling term of at most one session
+- a process may open and use many terminals, but the controlling term is special in that it provides job control and signal handling
+- in general, all processes in a login session have the same controlling terminal (tty or pts), and the shell is the session leader
+- a terminal always sends signals to whole process groups, never single processes (but a group might consist of only one process)
+- a terminal may have at most one foreground process group, all others are in the background
+- a foreground process group has unrestricted read and write access to a controlling terminal, and more
+- if the terminal detects a special character, it sends a signal to the foreground process group
+- bacground groups can normally write to their terminal, but are not allowed read access (it can be changed)
+- each line of commands (with pipes and lists) are placed in one group by the shell, this is why ^C kills them all
+- the shell waits for each line, unless & (never marked as foreground) or ^Z is used (stops the group and marks it as background)
+- shells have the concept of jobs which are more or less synonymous with process groups which haven't finished yet
+- bg and fg move jobs from foreground to background and vice versa; they take job number (%1 etc.) or nothing, in which case they act on the current/last job
+- jobs show all jobs
+- wait allows waiting for a job or group to finish; sending ^Z or -STOP stops it
+- disown removes a specified (or current/last job) from the shells job table; this means the job will not be sent SIGHUP, and will outlive the shell; however, it isn't detached from its terminal, so when the terminal is destroyed (if it was a pty), the app will fail when it tries to access it
+- nohup can also be used to prevent sending SIGHUP to the program, but it also closes stdin (so the program won't be able to read anything even if it is in the foreground) and redirects output to nohup.out; it doesn't remove the job from the shell's job table nor will it move it the the background (but the user will most likely want to do it anyways); disown -h is similar to this
+- setterm -blank 0-60 sets the time after which the screen will be blanked if no activity was detected
+
+LINKING:
+- static linking just copies the symbols etc. into the executable; dynamic linking is commonly used nowadays and interesting
+- there are actually 2 different steps: linking during compilation (ld) and loading at runtimea (ld-linux.so.2)
+- there are normally 2 standard paths to look up shared libraries: /lib and /usr/lib; sometimes /usr/local/lib is included as well; gcc might add more paths during compilation with -L, which actually passes them to the linker ld (see gcc --print-search-dirs)
+- ld-linux.so.x is a binary which loads the shared libraries; it looks as though it must be located at /lib
+- its path resides in the .interp section of the ELF program to be executed; it can be replaced by custom loader location so calling anything which executes this code on an untrusted binary is dangerous (like ldd) because it will just invoke this code
+- the actual loader can be seen by readelf -l <path> under the INTERP section
+- it can also be called directly: ld-linux.so.2 /bin/ls (full path is necessary)
+- ld-linux.so.2 --list can be used to show used shared libraries; ld-linux.so.2 --library-path PATH replaces LD_LIBRARY_PATH
+- ld.so is used for a very old a.out format not used nowadays
+- ld-linux.so checks if the name contains the slash, in which case it is looked for at the specified path (relative or absolute), otherwise it looks for the symbolic name in the LD_LIBRARY_PATH (if defined and the binary is not a setuid/setgid), in the DT_RUNPATH attribute of the binary which is hard-coded at compile time, /etc/ld.so.cache and the standard libs (this step can be disabled at link time with -z nodeflib)
+- /etc/ld.so.cache is filtered out from default libs if -z nodeflib was found; it can also contain hardware capability specific libraries (like mmx etc.), which can use hardware specific instructions and are preferred in ld.so.cache lookups
+- LD_PRELOAD can load libraries before the application; these can contain functions which replace real library functions; those not found in the preloaded libs are used from the real libs; preloaded libs on setuid/setgid binaries work only if they don't have slashes, and standard libraries must have the setuid bit set; /etc/ld.so.preload can also be used
+- ldd is a wrapper script for ld-linux which lists the libraries; some versions might execute the code to collect the dependencies, so be aware (also, remember the .interp warning above); it sets the LD_TRACE_LOADED_OBJECTS to print the dependencies
+- objdump -p <path> | grep NEEDED is safer but not as handy as it doesn't list transitive dependencies, must be invoked repeteadly for each dependency and its dependencies...
+- ldconfig updates the /etc/ld.so.cache file based on default libs and those found in /etc/ld.so.conf; normally, this is called by the package manager etc. or at boot (for example, ldconfig is required by sysinit.target in systemd, which is required by basic.target, which is required by multi-user.target etc.); arch does it in a package install hook for lib packages; it also creates versioning links
+- the soname is important - it is of the form libblah.so.1; sonames are put into the ELF file as dependency; it can be different than real library name, and it is what is looked for by the linker
+- the standard is to name a library like libfoo.so.1.2 (real name) and give it a soname of libfoo.so.1; if found by ldconfig, libfoo.so.1 link to libfoo.so.1.2 will be created; the linker name is just the name of the library. e.g. libfoo.so and this is why it is best to create a link from libfoo.so to the correct library version to link against; this is manual, but necessary only if linking against 'latest' version, not a specific major version; linking to a specific version is done with -l:libfoo.so.1 instead of -lfoo (the : means it is a file name)
+
+GPU, FRAMEBUFFER & KMS:
+- in the beginning, console used BIOS vga text modes, and graphics and acceleration was done mostly with X
+- there was framebuffer drivers which couldn't do acceleration, and fbcon was a linux console running on a framebuffer
+- all applications wanting to do hardware accelecration needed to program the GPU themselves and they conflicted with each other
+- X can also use a framebuffer - it renders everything in software and passes it to the framebuffer for display - slow as no acceleration
+- if an application doesn't want to implement acceleration itself, it must for example use X, making it a very fat dependency
+- other apps, like framebuffer consoles etc. wanted access the card, making problems as both worlds had mode setting code - the framebuffer
+  would have its settings, then X, when started, would save them, set its own, and whoever wanted to use the GPU via the framebuffer didn't
+  know that the card is in a different state; switching to the console caused X to save its GPU state and reset it to the previous
+  framebuffer settings; this might take a long time, cause flickering
+- a lot of logic, even duplicated, existed in the various X drivers
+- all of this made using alternatives harder as it had to implement the GPU code again
+- DRM was designed to fix problems, it is kernel drivers which can synchronized/queue access to the GPU and hence it between multiple apps
+- the DRM module contains a generic set of support functions for card-specific drivers
+- drm contains now a lot of logic that X drivers used to have, making accelerated rendering much simpler without X for other app, making
+  things like Wayland possible
+- the kernel API exposed to the userspace vio ioctls is not stable and should not be directly used; libdrm is used instead, which is used by
+  X, Mesa, drivers etc.; it packs the ioctls in a C API
+- DRM consists of a generic driver and a card specific driver; these are modules compiled to a set of modules per card in /usr/lib somewhere
+- card specific drm drivers can register themselves with the kernel drm driver and create a device in /dev/dri/card{n} on which extended
+  ioctls can be called
+- libdrm supports 'old' and 'new kms' drivers
+- KMS drivers are the kernel part which can set the GPU mode: resolution, color depth
+- KMS also implements the framebuffer - this way both the framebuffer and GPI driver were managed by the same entity and it made GPU
+  management and bookeeping easier - smooth switching between X and the console and different modes is possible etc.
+- apparently, fbcon is enabled and loaded by default along with KMS and some (most often the highest native) resolution is chosen
+- KMS conflicts with vgacon (text console) so fbcon is mandatory when KMS is used, i.e. no way to use vga text mode console and KMS at the
+  same time
+- to boot into real text mode, loading KMS and whatever must be prevented, which means the gpu driver should somehow not be loaded by udev
+  or the bruce force way:
+  - blacklist the i915 module, prevent it from being loaded as dependency, add 'install i915 /bin/true' to a blacklist file
+  - remove i915 from early userspace
+  - to tell grub to use text, set GRUB_TERMINAL_OUTPUT=console and possibly GRUB_GFXPAYLOAD_LINUX=text
+- fbset -xres x -yres y can change resoluton, but actually it only changes the 'usable space', i.e. the fonts and everything is of the same
+  size but not the whole screen is usable
+- changing KMS resolution on boot is possible with video=XXxYY etc., see http://nouveau.freedesktop.org/wiki/KernelModeSetting/
+- changing resolution after boot seems impossible for KMS framebuffer
+- if KMS driver is compiled as a module (like i915 on Arch), linux logos are not supported; compile the kernel with the driver and they are back
+- cool, rotate the console: echo 1 > /sys/class/graphics/fbcon/rotate or /sys/devices/virtual/graphics/fbcon; the same can be achieved with
+  a kernel cmdline parameter fbcon:rotate=1 etc. (use rotate_all for all consoles); this just rotates the console, all other apps use normal
+  orientation
+- fbcon to increase scrollback and more: in kernel line write 'XXXfb fbcon=scrollback:Yk', where XXX is video driver (e.g. i915fb), Y is a number of k (e.g. 32k, the default); works only when there is no 'vga=xxx' kernel argument; see kernel docs on fbcon for more
+- intel and opensource nvidia and ati drivers enable KMS by default (late start)
+- to prevent flickering etc. it is possible to enable KMS in early userspace, add the module to initramfs (add 'i915' to the modules in mkinitcpio for Arch)
+- sometimes, e.g. early userspace, a message like 'can't access tty; job control turned off' is displayed; this most likely mean the shell has been started on /dev/console which cannot be a controlling terminal; to fix this:
+  setsid sh -c 'exec sh </dev/tty1 >//dev/tty1 2>/dev/tty1'
+- kmscon and fbterm don't work with all applications written for the framebuffer, for example fbi to show images
+
+DEV & HOTPLUG:
+- the sysfs, usually mounted at /sys, contains available devies
+- each device node has a file 'dev' with major:minor number used by mknod
+- initially there was a static /dev, they devfs was invented but apparently had lots of problems (naming policy in the kernel, users want
+  device plug event to be available in user space, some unsolvable race conditions...)
+- udev was invented which solves there problems (naming policy with namedev, dynamic creation of /dev nodes, hotplugging mechanism, D-Bus
+  events)
+- the kernel can use a hotplug helper process or netlink when plug events happen
+- hotplug is by default /sbin/hotplug but can be cchanged in /proc/sys/kernel/hotplug (apparently, this also seems to be dated because of
+  udev and uevents); data is passed as envs
+- netlink uses a daemon listening to the kernel netlink socket (a way of the kernel to communicate with userland)
+- netlink packets are null terminated lines with data
+- next to the dev file is a uevent file; it is possible to inject event by writing 'add', 'remove' etc. to this file
+
+NET/WIFI:
+- process: make card visible (load driver) - bring it up - configure ip etc. (static or dhcp) - surf
+- ip link set up <iface>
+- if the above doesn't work with text like 'operation not possible due to RF-kill' on the command line or in 'journalctl -b -r' it means
+  the wifi card has been disabled: in BIOS, with a switch, in software (install 'rfkill' tool for this, check with 'rfkill list', I had to
+  Fn-F11 a few times to get it right)
+- when the wifi card is up, wpa_supplicant:
+  - create simple config file:
+    ctrl_interface=/run/wpa_supplicant # default path /var/run/wpa_supplicant, which links to this on arch
+    update_config=1
+  - start the supplicant (uses the newer driver, if doesn't work, check 'wext' or others, see 'wpa_supplicant -h | grep -C5 -i driver'):
+    wpa_supplicant -i <iface> -D nl80211 -c <config> # add -B for bacground mode, but foreground is good for initial tests
+  - start wpa_cli (if the config above uses nonstandard control interface path, specify it with -p):
+    > scan
+    > scan_result
+    > add_network 0
+    > set_network ssid "<ssid>"
+    > set_netword psk "<password>"
+    > enable_network
+    > save_config
+    > quit
+  - if it works, move the config to /etc/wpa_supplicant/wpa_supplicant-nl80211-<iface>.conf (maybe backup the other file, make sure the
+    driver part corresponds to the driver used when wpa_supplicant was started by hand)
+- if wpa_supplicant could connect, dhcpcd:
+  - dhcpcd <iface> # -b to run in background, but foreground is helpful to see errors
+  - ping google.com
+- if all works, enable services:
+  - systemctl enable wpa_supplicant-nl80211@<iface> (make sure the driver part is correct, check out the .service files to be sure)
+  - enable dhcpcd for specific interfaces explicitly instead of one global, as it creates race conditions for interface names
+    i.e. 'systemctl enable dhcpcd@wlp2s' and _not_ 'systemctl enable dhcpcd'
+  - add 'noarp' to /etc/dhcpcd.conf (if this is not needed!) - speeds up startup
+  - add 'nohook wpa_supplicant' to prevent dhcpcd from running it, we will start it ourselves with the driver of our choice
+  - this is the only way I found to start wpa_supplicant with the driver I want, and also makes the bootup faster as dhcpcd doesn't have to
+    start wpa_supplicant itself; I also think it kind of blocks without any supplicant at all, making boot really long
+- ifplugd may be used to automatically configure and unconfigure the wired interface when cable is plugged in and out; useful for laptops
+- instead of all this, connman can be used - its kind of big (~9mb, but is it? I can get rid of dhcp client etc.), but it comes with a dhcp
+  client etc. and starts really fast; in this case the custom wpa_supplicant config is not needed and dhcpclient can be uninstalled
+- connman config - /var/lib/connman
+- if using connman without vpn, connman-vpn can be masked
+
+PACMAN:
+- pacman-key --init to initialize the keyring
+- pacman-key --populate archlinux - populates the keyring with arch keys
+- pacman-key --refresh-keys - updates the keys
+- to remove keys, remove /etc/pacman.d/gnupg and initialize again
+- uncomment Color in /etc/pacman.conf ;d
+- add ILoveCandy to pacman.conf - changes hashes to dots eaten by pacman
+- use -q for less output (but it is not completely quiet)
+- use pacman -S repo/package to force installing a package from a certain repo - useful when mulitple repos have the same package
+- pacman -S foo checks if a package named foo exists, and if not found, checks for packages that 'provide' foo; this might be many packages and in this case a prompt is presented
+- pacman supports package groups (e.g. gnome); to see all pachages in a group use -Sqg; specyfing packages in a group, numbers, ranges (1-10) and negations (^4) may be specified
+- pacman -Sy refreshes the package list locally; -Syy forces the update even if pacman thinks the package list is fresh
+- do not call -Sy <package> - this leads to a system with a mixture of fresh packages from the repo, potentially with updated dependencies, and previously installed packages that linked against the older libs, which might break the system; always use -Syu to upgrade the system
+- remove package, its dependencies, dependants and all changed config files: pacman -Rcsn
+- pacman -Qdtq lists packages installed as deps and no longer needed, pacman -Rcsn $(pacman -Qdtq) will remove all of them; be careful: it also lists packages optionally used by other packages, like linux-headers by dkms
+- pacman -Qen to list explicitly installed packages from official repos; -Qdn lists dependencies, with -t lists orphans
+- /var/cache/pacman/pkg contains cache of packages installed since cleanup, might be useful for downgrades
+- pacman -Sc to clean cache (/var/cache/pacman/pkg/) as pacman keeps old and uninstalled versions; double c also removes currently installed packages from cache, forcing re-download when it needs to be reinstalled, and is discouraged
+- pacman log is in /var/log/pacman.log
+- verify files in a package - pacman -Qk(k) <package>; no package verifies the whole system; double k warnings might be ignored most of the time (modification time mismatch etc.) but sometimes show bigger problems (permission mismatch)
+- pacman -Qo shows owner of the file
+- pactree <package> lists dependency tree of the package; pactree -r <reverse> lists which installed packages depend on the package
+- custom local packages, e.g. built from AUR are installed with pacman -U <package>.pkg.tar.xz
+- when packages are upgraded and come with updated files which the user modified locally which are mention in the package as backup files, the new ones are saved as .pacnew files - they should be merged together
+- .pacsave files are created while removing packages if the user modified files locally and -n hasn't been specified while removing
+- .pacorig files are created when installing package files and a file not belonging to any package already exists at a given path
+- use expac with format strings to get information about packages
+- sorting packages by size: expac -s "%-30n %m" | sort -rhk 2 (reverse, in bytes) or pacsysclean (human readable)
+- pacman -Qi shows info about a package; -Qii will also show which files haven been modified
+
+ABS:
+- to build software from repos locally, from source, instead of binary installs (for best performance, only if wanted):
+  - pacman -S abs
+  - call abs to create the directories
+  - change PACKAGER in /etc/makepkg.conf to you for easy searching
+  - pacman -S expac
+  - 'expac "%n %p" | grep <PACKAGER> | column -t' to find locally build stuff
+  - create a '~/build' or user-own one in /var/abs/local/<user> - it will be used to copy PKGBUILD and built the package; building within
+    the abs will workd but later updates to the tree will overwrite the changes
+  - add IgnoreGroup = modifier to /etc/pacman.conf - pacman will ignore updating packages in this groupd, which will be the ones installed
+    locally
+  - for every locally built package, put 'groups=('modified')' in the PKGBUILD file
+  - build the updated package locally again after pacman updates ignored them
+- cower and pacaur
+
+SYSTEMD:
+- by default, graphical.target in systemd is used (it extends multi-user.target by graphical environment), and a warning about no
+  display-manager.service is logged during boot; for systems without display manager this doesn't make any sense, and can be changed:
+  systemctl set-default multi-user
+- set SystemMaxUse in /etc/systemd/journald.conf to 1G (or lower) - by default 10% of the filesystem capacity is used
+- journalctl -r -b - show logs from this boot in reverse
+
+KERNEL:
+- modules may be built-in or loadable, determined during kernel config
+- sysctl may be used to set kernel params (but as these are just files, simply writing to them is also an option)
+- kernel params available are retrieved with 'sysctl -a', and it is a fs hierarchy under /proc/sys, where / might be replaced by . but have to be consistent; replacing . with / allows keys with / in them, and vice versa
+- changes to files are lost on reboot; put values in /etc/sysctl.d and /usr/lib/sysctl.d (with ordering like 10-blah.conf and
+  20-foo.conf for ordering), /etc/sysctl.conf (when systemd is _not_ used) - see man sysctl and sysctl.d (systemd)
+- sysctl is invoked early on during boot so loadable modules don't have their params set; to fix this, udev rules are created to load the parameters or the modules are added to laod statically in /etc/modules-load.d (see man sysctl.d)
+- show loaded modules with dependencies: lsmod
+- modinfo <module> to see information, | grep parm to se the parameters
+- cat /sys/module/<module>/parameters/<param> for values
+- show set attributes and values: systool -v -m <module>
+- show modules dependencies: modprobe --show-depends <module> (more) or modinfo <module> | grep depends
+- modules are normally loaded when needed by udev, but can also be loaded statically when listed in files in /etc/modules-load.d/*.conf, where they are just listed by name line by line (this is part of systemd)
+- adding custom options to loaded modules can be done either on the kernel line or by adding /etc/modprobe.d/*.conf files; if any of the modules with custom config are loaded in early userspace, they need to be added to initramfs (e.g. FILES directive in /etc/mkinitcpio.conf or the modconf hook)
+- files in /etc/modprobe.d may create aliases for modules
+- blacklisting is preventing modules from loading; it can be done on the kernel command line with blacklist.modules=moda,modb or in /etc/modprobe.d files with the blacklist directive
+- ordering etc. can also be defined in modprobe configuration files
+- early userspace may load certain moduls, so blacklisting should also happen in initramfs - again, add the files to it somehow (see above); mkinitcpio -M lists autodetected modules
+- the blacklist directive prevents a module from being loaded automatically, but it might be loaded as a dependency of another module; to really prevent this, use the 'install /bin/true' or similar directive in /etc/modprobe.d conf file for the module; using /bin/false will fail loading the module and its dependants; /bin/true will say it is loaded and may break depending modules
+- the kmod package provides many tools to load / unload modules etc., like modprobe, lsmod, insmod (dependencies not inserted) etc.
+- to facilitate module dependency loading with modprobe, depmod is used; it checks which symbols modules export and which they need from other modules and write /usr/lib/modules/<kernel>/modules.dep (readable) and modules.dep.bin (binary for speed) for dependencies, modules.symbols and modules.symbols.bin with all symbols, and modules.devname with the devices the modules create
+- depmod can be configured in /etc/depmod.d/*.conf files, like change module ordering or resolve symbol clashes
+- at least on Arch, depmod is run on kernel updates
+- turns out depmod files are actually required for modprobe to do anything at all, without these files it just silently fails :-| depmod can be rund with the -b <basedir> flag and generates relative paths, which is ok, also for busybox
+- lspci -k shows used devices with their drivers and all drivers which are capable of handling the device
+
+DKMS:
+- it is a way to distribute kernel modules outside of the kernel invented by Dell
+- it is a duplicated source tree which holds module sources and compiled binaries; this allows modules and their fixes to be distributed separately from the kernel
+- it is an executable to build, install and remove modules
+- enables drivers to be rebuilt automatically on kernel updates, which makes life easier for users of drivers outside of the kernel - just think of the fukcing Broadcom wireless card breaking on every other kernel update
+- the sources for a module must be in /usr/src/<module>-<version>, along with a valid dkms.conf file with directives how to build and where to install (the source tree, dkms tree - /var/dkms - and install location can be configured on the command line or in /etc/framework.conf)
+- add copies the sources into dkms
+- build builds the module binary
+- install installs - copies the compiled binary to /usr/lib/modules directory and makes a backup of the previous module with the same name, if any
+- uninstall removes the module binary and restores the previous original module, if any
+- remove removes the source tree additionally if the removed version is the very last one
+- it is possible to pass the kernel version on the command line or not, in which case the currently running kernel is used
+- the status command can show the info for a moudle, its version or all modules
+- the match commands can 'copy' the current DKMS modules' configurations to a new kernel
+- others: mktarball, ldtarball and mkdriverdist
+- the conf file format was a few shell variables sources by DKMS
+
+BOOT:
+- when the kernel is loaded, it hands over control to an 'init' process which is responsible for start all services etc.
+- one of the services is udev, which is responsible for finding and configuring devices etc.
+- if all data and files is on one filesystem, the init is enough to boot correctly
+- if there is some more exotic installation (like the root filesystem is encrypted etc.), all necessary modules would have to be compiled
+  into the kernel, and as many different computers use the same stock distribution kernel, this is a bad idea
+- instead, a temp root may be mounted whose only purpose is to provide tools needed to load the rest of the system and the real root before
+  starting the real init; this way, the kernel is slim and the temp root contains all the necessary modules, drivers and tools; this is
+  called 'the early userspace'
+- this was done with initrd, nowadays initramfs is used; the temp root filesystem had an app (/init by default, can be changed with rdinit=
+  kernel parameter) which was invoked to set the environment up, mount the real root, switches the new real root to be the root, and invoked
+  the real init (/sbin/init or /etc/init or /bin/init or /bin/sh by default; on systemd systems /sbin/init is a link to systemd, can be changed with the init= kernel parameter)
+- initrd (/dev/initrd by default, might be changes with the initrd= kernel parameter) was a block device with a filesystem, with a fixed
+  size devined when created (so either too small to fit new binaries, or too big and wasting space); it also consumed kernel memory; the
+  default init program was /linuxrc (see man 4 initrd for more detailed info about how booting up worked)
+- initramfs is a compressed cpio archive in the newc format with the necessary tools, unpacked into an in-memory tempfs (flexible and
+  unlimited size, may fill up the whole memory) or ramfs (extends tempfs, allows limiting size)
+- during boot, the kernel determines if the file is the old ramdisk or the new initramfs
+- cpio was chosen because it is easy to implement; the kernel contains the code to unpack the cpio archive and it is little code
+- the cpio archive and stored inside or alongside the kernel; the kernel must be compiled with initrd/initramfs support; compression depends
+  on the kernel, gzip is assumed below
+- if embedding, the kernel has to be rebuilt; there is always a minimal built-in ramfs, but it might be empty and occupied negligible amount
+  of memory
+- it is much more flexible to use the external file; also, it allows packaging proprietary binaries outside of the kernel
+- the external cpio archive complements the internal one as it overwrites it
+- if the temp root fs doesn't have the init, the kernel will fall back to the old way of looking for the root partition and running its
+  /rdinit
+- initrd was a real device and its init was responsible for finding the real root; with initramfs, the root= kernel param can still be used, many initramfs generation tools like Dracut or mkinitcpio actually use it; rootflags= can be used to define the mount options
+- old initrd would call pivot_root, umount the ramdisk and give control to the kernel; ramfs should delete its contents to free space,
+  overmount the real root on itself, attach std streams to the new /dev/console and exec the real init; there exist tools for this, like
+  switch_root from busybox or new_root from klibc
+- list initramfs content: gzip -cd initramfs.img | (bsd)cpio -it or lsinitcpio initramfs.img on arch
+- unpack: gzip -cd initramfs.img | (bsd)cpio -id --format=newc --no-absolute-filenames
+- to create a cpio image:
+  - all binaries and libs must be copied; use ldd to list all shared lib required by a program or library - these have
+    to be copied as well (the part after the arrow is the real path to copy to, the part before is the symbolic name - found by
+    LD_LIBRARY_PATH; lines without arrow and no full path are not found and needed); also, some files and other libs might be required,
+    check out equery and strace to find out
+  - add init in the root of the ramfs with the shebang pointing to busybox sh and print something; this will result in kernel panic as the
+    init (the script) will then exit and it makes the kernel go panicky
+  - to create an image execute in the folder that is the root:
+    find -print0 | (bsd)cpio -0ov --format=newc | gzip -9 > ../ramfs.cpio.gz
+  - the temp init must not exit or else it will cause a kernel panic
+- when the message 'No init found.' is shown and the kernel panics, the init is not neccessarily missing, it can be caused by different problems preventing the init from being found or loaded: incorrect root fs type, missing dependencies, missing /usr/lib/ld-linux.so.2, wrong arch, etc.
+- it is possible to use systemd in initramfs; the image must provide the /etc/intrd-release which is checked for existence by systemd and defined it should run in initramfs mode; systemctl switch-root can be used to transition to the real root; this will kill a lot of processes, some should be saved
+
+SHUTDOWN with systemd (https://bbs.archlinux.org/viewtopic.php?pid=1372562#p1372562):
+- systemd activates shutdown.target, which conflicts with all services and mount points, essentially stopping everything that was started
+- activating shutdown.target starts a service that creates the executable /run/initramfs/shutdown, if it doesn't exist yet; this is a usable environment like early userspace (in Arch it actually is generated from the initramfs but with certain mkinitcpio options which disable alot of stuff, no longer needed)
+- upon reaching shutdown.target, systemd replaces itself with /usr/lib/systemd/systemd-shutdown
+- systemd-shutdown tries kill all remaining processes, unmount all remaining file systems, detach all loop and device-mapper devices; it gives up at some point, since most of the time it will fail for a few mount points
+- if /run/systemd/shutdown does not exist, systemd-shutdown proceeds to power off or reboot the machine
+- systemd-shutdown changes the root to /run/initramfs, puts the old root to /oldroot and replaces itself with /shutdown
+- in Arch, /shutdown is a copy of /usr/lib/systemd/systemd-shutdown, which again tries to unmount everything and so on; most of the time, it succeeds now (this means that the root file system is not only remounted read-only as it was classically done, but unmounted entirely
+- /shutdown then proceeds to power off or reboot
+- with Dracut, shutdown is a custom executable which umounts remaining filesystems and does whatever is necessary
+
+MKINITCPIO/initramfs:
+- remove unneeded modules from /etc/mkinitcpio.conf
+- a set of scripts to help create initramfs; its configuration is in /etc/mkinitcpio.conf and allows adding modules, files, binaries (analyzed for dependencies, which are also included), hooks and compression
+- built around BusyBox
+- it is modular and uses hooks to help easily create the image (autodetect modules among others) and at runtime (to set the keyboard settings, resume from hibernation etc.)
+- presets located in /etc/mkinitcpio.d/*.preset are used to list potentially multiple presets, their save location and image names, kernel location/version, general config and custom mkinitcpio options
+- preset files are packaged with kernels; they don't need to be used from the command line, but are used when the kernels they are packaged with are updated
+- for every runtime hook there should be an install hook with the same name and it calls add_runscript to add the runtime hook
+- install hooks are sourced by mkinitcpio and can define the following functions can be defined:
+  - help to show hook help with mkinitcpio -H <hook>
+  - build invoked to actually perform install actions; there are a few API functions that this function can call to programmatically add modules, files, directories etc.; add_runscript registers a runtime hook
+- the runtime hooks are sources by the BusyBox ash shell and various functions are called at various stages
+  - run_earlyhook after the API fs have been mounted and kernel command line parsed; deamons such as udev are started here
+  - run_hook after early hooks and after user defined modules have been installed; this is the standard hook point
+  - run_latehook after the root device has been mounted
+  - run_cleanuphook as late as possible; they shut down daemons etc.
+  - all hooks except for the cleanup hooks are run in the orer they are specified in the configuration; cleanup hooks are run in reverse order
+- runtime configuration is available via kernel command line options which is parsed by init; here are some of the params the core understands, but hooks may add more:
+  - root - the root device to mount
+  - break[=premount] or break=postmount - fall into interactive shell to resolve any problems
+  - disablehooks - comma separated list of hooks to disable for this boot
+  - earlymodules - comma separated list of modules to load first in the specified ordering
+  - ro, rw - how to mount the root filesystem; rw is useful when the fsck hook is used as it can speed up the boot (the root is fscked anyways and doesn't have to be remounted again as rw)
+  - quiet - less output
+- lsinitcpio can list, extract etc. the initramfs image
+- to create a very simple but usable custom image, a few things are necessary, at least for Arch, for a system using AT keyboard:
+  - a minimum set of binaries:
+    - /bin/
+      - busybox
+      - kmod
+      - mount
+      - setsid
+    - /init
+    - /lib/ld-linux.so.2 (the loader)
+    - /lib/modules/$(uname -r)/
+      - kernel/
+        - atkbd.ko.gz
+        - i80242.ko.gz
+        - libps2.ko.gz
+        - serio.ko.gz
+      - modules.{alias{,.bin},builtin.bin,dep{,.bin},devname,softdep,symbols{,.bin}}
+    - /usr/lib/
+      - libblkid.so.1 (mount)
+      - libc.so.6 (everything depends on it)
+      - libmount.so.1 (mount)
+      - libuuid.so.1 (mount)
+      - libz.so.1 (kmod)
+  - the depmod.* files in ./lib/modules/$(uname -r) are generated by depmod by invoking the following depmod command in the root of the image folder:
+    depmod --basedir $(pwd) $(pwd)/lib/modules/$(uname -r)/kernel/*.ko.gz
+    the resulting dependency files use relatives paths to the modules in kernel/
+  - init contents:
+      #!/bin/busybox sh
+      /bin/busybox --install -s /bin # create list to tools
+      ln -s /bin/kmod /bin/modprobe
+      mkdir /proc && mount -t proc dummy_proc /proc
+      mkdir /sys && mount -t sysfs dummy_sys /sys
+      [ -d /dev ] || mkdir /dev && mount -t devtmpfs dummy_dev /dev
+      mkdir /run && mount -t tmpfs dummy_run /run
+      modprobe atkbd # required for AT keyboard support
+      #setsid sh -c 'exec sh </dev/tty1 >/dev/tty1 2>/dev/tty1' # starts a shell on a tty1 device with job control
+      setsid cttyhack sh
+    this init will start an interactive shell, which will be able to mount root etc.
+    TO BE CONTINUED
